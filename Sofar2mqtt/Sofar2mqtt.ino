@@ -1,6 +1,6 @@
 
 // The device name is used as the MQTT base topic. If you need more than one Sofar2mqtt on your network, give them unique names.
-const char* version = "v3.2";
+const char* version = "v3.3";
 
 bool tftModel = true; //true means 2.8" color tft, false for oled version
 
@@ -95,6 +95,14 @@ unsigned long lastMqttReconnectAttempt = 0;
   There will also be messages published to Sofar2mqtt/response/<type> when things happen
   in the background, such as setting auto mode on startup and switching modes in battery_save mode.
 
+  If in the inverter the reflux (max export to grid) is enabled, you can control the amount of max 
+  export power send to the grid by sending below message:
+
+  Sofar2mqtt/set/reflux - send values in the range 0-3000 (watts) where 0 is no export to grid
+
+  There will be Sofar2mqtt/response/reflux response, which has a result code in the lower byte
+  and status in the upper byte.
+
   (c)Colin McGerty 2021 colin@mcgerty.co.uk
   Major version 2.0 rewrite by Adam Hill sidepipeukatgmaildotcom
   Thanks to Rich Platts for hybrid model code and testing.
@@ -182,6 +190,8 @@ bool BATTERYSAVE = false;
 #define SOFAR_FN_DISCHARGE	0x0101
 #define SOFAR_FN_CHARGE		0x0102
 #define SOFAR_FN_AUTO		0x0103
+
+#define SOFAR_REG_REFLUX 0x1243
 
 #define SOFAR2_REG_RUNSTATE  0x0404
 #define SOFAR2_REG_GRIDV   0x048D
@@ -813,7 +823,10 @@ void mqttCallback(String topic, byte *message, unsigned int length)
             fnCode = SOFAR_FN_DISCHARGE;
         }
 
-        if (fnCode)
+        if (cmd == "reflux")
+        {
+          sendRefluxCmd(SOFAR_SLAVE_ID, fnParam);
+        } else if (fnCode)
         {
           BATTERYSAVE = false;
           sendPassiveCmd(SOFAR_SLAVE_ID, fnCode, fnParam, cmd);
@@ -885,12 +898,15 @@ void mqttReconnect()
       chargeMode += "/set/charge";
       String dischargeMode(deviceName);
       dischargeMode += "/set/discharge";
+      String reflux(deviceName);
+      reflux += "/set/reflux";
 
       // Subscribe or resubscribe to topics.
       mqtt.subscribe(const_cast<char*>(standbyMode.c_str()));
       mqtt.subscribe(const_cast<char*>(autoMode.c_str()));
       mqtt.subscribe(const_cast<char*>(chargeMode.c_str()));
       mqtt.subscribe(const_cast<char*>(dischargeMode.c_str()));
+      mqtt.subscribe(const_cast<char*>(reflux.c_str()));
     }
   }
 }
@@ -1067,6 +1083,28 @@ int sendPassiveCmdV2(uint8_t id, uint16_t cmd, int32_t param, String pubTopic) {
 
   String topic(deviceName);
   topic += "/response/" + pubTopic;
+  sendMqtt(const_cast<char*>(topic.c_str()), retMsg);
+  return err;
+}
+
+int sendRefluxCmd(uint8_t id, uint16_t param) {
+  modbusResponse  rs;
+  uint8_t frame[] = { id, MODBUS_FN_WRITEMULREG, (SOFAR_REG_REFLUX >> 8) & 0xff, SOFAR_REG_REFLUX & 0xff, 0, 1, 2, (param >> 8) & 0xff, param & 0xff, 0, 0 };
+  int   err = -1;
+  String    retMsg;
+
+  if (sendModbus(frame, sizeof(frame), &rs))
+    retMsg = rs.errorMessage;
+  else if (rs.dataSize != 2)
+    retMsg = "Reponse is " + String(rs.dataSize) + " bytes?";
+  else
+  {
+    retMsg = String((rs.data[0] << 8) | (rs.data[1] & 0xff));
+    err = 0;
+  }
+
+  String topic(deviceName);
+  topic += "/response/reflux";
   sendMqtt(const_cast<char*>(topic.c_str()), retMsg);
   return err;
 }
@@ -1606,7 +1644,7 @@ void setup()
     if (inverterModel == ME3000) {
       tft.println("ME3000");
     } else if (inverterModel == HYBRID) {
-      tft.println("HYBRID");
+      tft.println("HYD ES");
     } else {
       tft.println("HYD EP/KTL");
     }
@@ -1632,33 +1670,29 @@ void setup()
     drawBitmap(0, 0, background, 240, 320, ILI9341_WHITE);
     printScreen("Started");
     tft.fillCircle(20, 290, 10, ILI9341_RED); //turn modbus icon to red first
+    lastScreenTouch = millis();
   }
   heartbeat();
   mqttReconnect();
 }
 
-int brightness = 32;
-bool touchedBefore = false;
+bool touchedBefore = true;
 void tsLoop() {
   if (ts.tirqTouched()) {
     if (ts.touched()) { //this will run update() and therefore reset the tirqTouched flag if touch is released
+      lastScreenTouch = millis();
       if (!touchedBefore) {
         touchedBefore = true;
-        brightness == 32 ? brightness = 0 : brightness = 32;
-        analogWrite(TFT_LED, brightness);
-        lastScreenTouch = millis();
-        delay(100);
+        analogWrite(TFT_LED, 32);
+        delay(50);
       }
-    } else {
-      touchedBefore = false;
     }
   }
-  if ((screenDimTimer > 0) && (brightness > 0) && ((unsigned long)(millis() - lastScreenTouch) > (1000 * screenDimTimer))) {
-    brightness--;
-    analogWrite(TFT_LED, brightness);
+  if ((screenDimTimer > 0) && touchedBefore && ((unsigned long)(millis() - lastScreenTouch) > (1000 * screenDimTimer))) {
+    touchedBefore = false;
+    analogWrite(TFT_LED, 0);
     delay(50);
   }
-
 }
 
 void loopRuns() {
