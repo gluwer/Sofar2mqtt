@@ -7,7 +7,6 @@ bool tftModel = true; //true means 2.8" color tft, false for oled version
 bool calculated = true; //default to pre-calculated values before sending to mqtt
 
 unsigned int screenDimTimer = 30; //dim screen after 30 secs
-unsigned long lastScreenTouch = 0;
 
 
 #include <DoubleResetDetect.h>
@@ -1095,7 +1094,7 @@ int sendRefluxCmd(uint8_t id, uint16_t param) {
 
   if (sendModbus(frame, sizeof(frame), &rs))
     retMsg = rs.errorMessage;
-  else if (rs.dataSize != 2)
+  else if (rs.dataSize != 5)
     retMsg = "Reponse is " + String(rs.dataSize) + " bytes?";
   else
   {
@@ -1670,7 +1669,6 @@ void setup()
     drawBitmap(0, 0, background, 240, 320, ILI9341_WHITE);
     printScreen("Started");
     tft.fillCircle(20, 290, 10, ILI9341_RED); //turn modbus icon to red first
-    lastScreenTouch = millis();
   }
   heartbeat();
   mqttReconnect();
@@ -1678,9 +1676,11 @@ void setup()
 
 bool touchedBefore = true;
 void tsLoop() {
+  static unsigned long lastRun = 0;
+
   if (ts.tirqTouched()) {
     if (ts.touched()) { //this will run update() and therefore reset the tirqTouched flag if touch is released
-      lastScreenTouch = millis();
+      lastRun = millis();
       if (!touchedBefore) {
         touchedBefore = true;
         analogWrite(TFT_LED, 32);
@@ -1688,7 +1688,8 @@ void tsLoop() {
       }
     }
   }
-  if ((screenDimTimer > 0) && touchedBefore && ((unsigned long)(millis() - lastScreenTouch) > (1000 * screenDimTimer))) {
+
+  if ((screenDimTimer > 0) && touchedBefore && checkTimer(&lastRun, 1000 * screenDimTimer)) {
     touchedBefore = false;
     analogWrite(TFT_LED, 0);
     delay(50);
