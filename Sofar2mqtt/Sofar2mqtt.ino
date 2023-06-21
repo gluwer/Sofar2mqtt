@@ -7,6 +7,7 @@ bool tftModel = true; //true means 2.8" color tft, false for oled version
 bool calculated = true; //default to pre-calculated values before sending to mqtt
 
 unsigned int screenDimTimer = 30; //dim screen after 30 secs
+unsigned long lastScreenTouch = 0;
 
 
 #include <DoubleResetDetect.h>
@@ -97,7 +98,7 @@ unsigned long lastMqttReconnectAttempt = 0;
   If in the inverter the reflux (max export to grid) is enabled, you can control the amount of max 
   export power send to the grid by sending below message:
 
-  Sofar2mqtt/set/reflux - send values in the range 0-3000 (watts) where 0 is no export to grid
+  Sofar2mqtt/set/reflux - send value "true" to enable anti reflux with watts set in inverter
 
   There will be Sofar2mqtt/response/reflux response, which has a result code in the lower byte
   and status in the upper byte.
@@ -190,7 +191,7 @@ bool BATTERYSAVE = false;
 #define SOFAR_FN_CHARGE		0x0102
 #define SOFAR_FN_AUTO		0x0103
 
-#define SOFAR_REG_REFLUX 0x1243
+#define SOFAR_REG_REFLUX 0x1242
 
 #define SOFAR2_REG_RUNSTATE  0x0404
 #define SOFAR2_REG_GRIDV   0x048D
@@ -824,7 +825,7 @@ void mqttCallback(String topic, byte *message, unsigned int length)
 
         if (cmd == "reflux")
         {
-          sendRefluxCmd(SOFAR_SLAVE_ID, fnParam);
+          sendRefluxCmd(SOFAR_SLAVE_ID, messageBool ? 1 : 0);
         } else if (fnCode)
         {
           BATTERYSAVE = false;
@@ -1098,7 +1099,7 @@ int sendRefluxCmd(uint8_t id, uint16_t param) {
     retMsg = "Reponse is " + String(rs.dataSize) + " bytes?";
   else
   {
-    retMsg = String((rs.data[0] << 8) | (rs.data[1] & 0xff));
+    retMsg = String((rs.data[2] << 8) | (rs.data[3] & 0xff));
     err = 0;
   }
 
@@ -1674,26 +1675,28 @@ void setup()
   mqttReconnect();
 }
 
-bool touchedBefore = true;
+int brightness = 32;
+bool touchedBefore = false;
 void tsLoop() {
-  static unsigned long lastRun = 0;
-
   if (ts.tirqTouched()) {
     if (ts.touched()) { //this will run update() and therefore reset the tirqTouched flag if touch is released
-      lastRun = millis();
       if (!touchedBefore) {
         touchedBefore = true;
-        analogWrite(TFT_LED, 32);
-        delay(50);
+        brightness = 32;
+        analogWrite(TFT_LED, brightness);
+        lastScreenTouch = millis();
+        delay(100);
       }
+    } else {
+      touchedBefore = false;
     }
   }
-
-  if ((screenDimTimer > 0) && touchedBefore && checkTimer(&lastRun, 1000 * screenDimTimer)) {
-    touchedBefore = false;
-    analogWrite(TFT_LED, 0);
+  if ((screenDimTimer > 0) && (brightness > 0) && ((unsigned long)(millis() - lastScreenTouch) > (1000 * screenDimTimer))) {
+    brightness--;
+    analogWrite(TFT_LED, brightness);
     delay(50);
   }
+
 }
 
 void loopRuns() {
